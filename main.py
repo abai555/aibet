@@ -2,158 +2,147 @@ import telebot
 import sqlite3
 from flask import Flask
 from threading import Thread
-from datetime import datetime, timedelta
 from groq import Groq
+from datetime import datetime, timedelta
 
 # === CONFIG ===
 TELEGRAM_TOKEN = "7241781324:AAExPfLBo-66jenP-rdXo6ZGGXjtSa_LIVk"
 GROQ_API_KEY = "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"
-ADMIN_ID = 1023932092  # Ваш Telegram ID
+ADMIN_ID = 1023932092
 MIR_CARD = "2200701901154812"
 CRYPTO_ADDRESS = "TH92J3hUqbAgpXiC5NtkxFHGe2vB9yUonH"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 client = Groq(api_key=GROQ_API_KEY)
 
-# === Flask для Uptime ===
+# === Flask (Uptime)
 app = Flask(__name__)
 @app.route('/')
 def home():
-    return "Bot is alive!"
-Thread(target=lambda: app.run(host="0.0.0.0", port=8080)).start()
+    return "Bot is running!"
+def run(): Thread(target=app.run, kwargs={"host": "0.0.0.0", "port": 8080}).start()
+run()
 
-# === БД ===
+# === DB
 conn = sqlite3.connect("users.db", check_same_thread=False)
 cursor = conn.cursor()
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
-    access INTEGER DEFAULT 0,
-    expires_at TEXT
-)
-""")
+    until TIMESTAMP
+)""")
 conn.commit()
 
-# === Команда /start ===
+# === /start
 @bot.message_handler(commands=['start'])
-def start(message):
+def start(msg):
     markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row("🔍 Analyze Match", "💳 Donate & Get Access", "⏳ /status")
-    bot.send_message(message.chat.id,
+    markup.row("🔍 Analyze Match", "💳 Donate & Get Access", "/status")
+    bot.send_message(msg.chat.id,
         "<b>🤖 AI Match Analyzer</b>\n\n"
-        "Analyze matches using AI.\n\n"
-        "<b>Pricing:</b>\n"
-        "• One-time – $5\n"
-        "• Weekly – $25\n"
-        "• Monthly – $65\n"
-        "• Yearly – $390\n\n"
-        "Click the button below after payment.",
-        parse_mode="HTML",
-        reply_markup=markup
+        "Analyze football matches using AI predictions.\n"
+        "Access requires payment.\n\n"
+        "<b>Prices:</b>\n"
+        "• 1 Day – $5\n"
+        "• 1 Week – $25\n"
+        "• 1 Month – $65\n"
+        "• 1 Year – $390",
+        parse_mode="HTML", reply_markup=markup
     )
 
-# === Донат и доступ ===
-@bot.message_handler(func=lambda msg: msg.text == "💳 Donate & Get Access")
+# === Donate
+@bot.message_handler(func=lambda m: m.text == "💳 Donate & Get Access")
 def donate(msg):
     markup = telebot.types.InlineKeyboardMarkup()
     markup.add(telebot.types.InlineKeyboardButton("✅ I Paid", callback_data="paid"))
     bot.send_message(msg.chat.id,
-        f"Send donation to:\n\n"
-        f"💳 MIR: <code>{MIR_CARD}</code>\n"
-        f"🪙 USDT TRC20: <code>{CRYPTO_ADDRESS}</code>\n\n"
-        "Then press '✅ I Paid'.",
-        parse_mode="HTML",
-        reply_markup=markup
+        f"Send payment to:\n\n"
+        f"💳 MIR Card: <code>{MIR_CARD}</code>\n"
+        f"🪙 USDT (TRC20): <code>{CRYPTO_ADDRESS}</code>\n\n"
+        "After payment, press '✅ I Paid'. Admin will confirm and set your access.",
+        parse_mode="HTML", reply_markup=markup
     )
 
-# === Кнопка "I Paid" ===
-@bot.callback_query_handler(func=lambda call: call.data == "paid")
-def paid_handler(call):
-    uid = call.from_user.id
-    markup = telebot.types.InlineKeyboardMarkup()
+# === Confirm
+@bot.callback_query_handler(func=lambda c: c.data == "paid")
+def paid(call):
+    uid = call.message.chat.id
+    bot.send_message(uid, "Your payment request is sent. Please wait for confirmation.")
+    markup = telebot.types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         telebot.types.InlineKeyboardButton("1 Day", callback_data=f"sub_1_{uid}"),
-        telebot.types.InlineKeyboardButton("7 Days", callback_data=f"sub_7_{uid}")
-    )
-    markup.add(
-        telebot.types.InlineKeyboardButton("30 Days", callback_data=f"sub_30_{uid}"),
-        telebot.types.InlineKeyboardButton("365 Days", callback_data=f"sub_365_{uid}")
+        telebot.types.InlineKeyboardButton("1 Week", callback_data=f"sub_7_{uid}"),
+        telebot.types.InlineKeyboardButton("1 Month", callback_data=f"sub_30_{uid}"),
+        telebot.types.InlineKeyboardButton("1 Year", callback_data=f"sub_365_{uid}")
     )
     bot.send_message(ADMIN_ID,
-        f"User {call.from_user.first_name} ({uid}) requests access.",
+        f"User @{call.from_user.username or 'NoUsername'} ({uid}) pressed I Paid.\n"
+        f"Choose access period:",
         reply_markup=markup
     )
-    bot.send_message(uid, "🕓 Payment submitted. Please wait for admin approval.")
 
-# === Подтверждение подписки ===
-@bot.callback_query_handler(func=lambda call: call.data.startswith("sub_"))
-def set_subscription(call):
-    _, days, uid = call.data.split("_")
-    uid = int(uid)
-    expires = datetime.now() + timedelta(days=int(days))
-    cursor.execute("INSERT OR REPLACE INTO users (user_id, access, expires_at) VALUES (?, 1, ?)", (uid, expires.isoformat()))
+# === Admin Set Period
+@bot.callback_query_handler(func=lambda c: c.data.startswith("sub_"))
+def set_sub(call):
+    if call.from_user.id != ADMIN_ID: return
+    days, uid = int(call.data.split("_")[1]), int(call.data.split("_")[2])
+    until = datetime.now() + timedelta(days=days)
+    cursor.execute("INSERT OR REPLACE INTO users (user_id, until) VALUES (?, ?)", (uid, until))
     conn.commit()
-    bot.send_message(uid, f"✅ Access granted until {expires.strftime('%Y-%m-%d %H:%M')}")
-    bot.send_message(call.message.chat.id, "Access confirmed.")
+    bot.send_message(uid, f"✅ Access granted until {until.strftime('%Y-%m-%d %H:%M')}")
+    bot.send_message(ADMIN_ID, f"✅ Subscription activated for user {uid}")
 
-# === Проверка статуса /status ===
+# === Status
 @bot.message_handler(commands=['status'])
-def check_status(message):
-    cursor.execute("SELECT access, expires_at FROM users WHERE user_id = ?", (message.chat.id,))
+def status(msg):
+    cursor.execute("SELECT until FROM users WHERE user_id=?", (msg.chat.id,))
     row = cursor.fetchone()
-    if row and row[0] == 1:
-        until = datetime.fromisoformat(row[1])
-        if until < datetime.now():
-            cursor.execute("UPDATE users SET access = 0 WHERE user_id = ?", (message.chat.id,))
-            conn.commit()
-            bot.send_message(message.chat.id, "❌ Your access has expired.")
+    if row:
+        end = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S.%f")
+        bot.send_message(msg.chat.id, f"⏳ Your access is valid until:\n<b>{end.strftime('%Y-%m-%d %H:%M')}</b>", parse_mode="HTML")
+    else:
+        bot.send_message(msg.chat.id, "❌ You don't have active access.")
+
+# === Analyze Button
+@bot.message_handler(func=lambda m: m.text == "🔍 Analyze Match")
+def access_check(msg):
+    cursor.execute("SELECT until FROM users WHERE user_id=?", (msg.chat.id,))
+    row = cursor.fetchone()
+    if row:
+        until = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S.%f")
+        if until > datetime.now():
+            bot.send_message(msg.chat.id, "✅ Send match details:")
         else:
-            bot.send_message(message.chat.id, f"✅ Access active until: {until.strftime('%Y-%m-%d %H:%M')}")
+            bot.send_message(msg.chat.id, "❌ Your access expired. Renew it via 💳 Donate & Get Access")
     else:
-        bot.send_message(message.chat.id, "❌ No active access.")
+        bot.send_message(msg.chat.id, "❌ No active subscription. Use 💳 Donate & Get Access")
 
-# === Проверка доступа при анализе ===
-@bot.message_handler(func=lambda msg: msg.text == "🔍 Analyze Match")
-def ask_for_match(msg):
-    cursor.execute("SELECT access, expires_at FROM users WHERE user_id = ?", (msg.chat.id,))
-    row = cursor.fetchone()
-    if row and row[0] == 1 and datetime.fromisoformat(row[1]) > datetime.now():
-        bot.send_message(msg.chat.id, "Send match info (e.g. Arsenal vs Real Madrid):")
-    else:
-        bot.send_message(msg.chat.id, "❌ Access denied. Please donate first.")
-
-# === Анализ матча ===
+# === Match Analysis
 @bot.message_handler(func=lambda msg: True)
 def analyze_match(msg):
-    cursor.execute("SELECT access, expires_at FROM users WHERE user_id = ?", (msg.chat.id,))
+    cursor.execute("SELECT until FROM users WHERE user_id=?", (msg.chat.id,))
     row = cursor.fetchone()
-    if not row or row[0] != 1 or datetime.fromisoformat(row[1]) < datetime.now():
+    if not row or datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S.%f") < datetime.now():
         return
-    bot.send_message(msg.chat.id, "⚡ Analyzing match...")
+    bot.send_message(msg.chat.id, "⚡ Analyzing...")
     try:
-        prompt = f"""
-Respond in short format. Include:
-1. Prediction of match result (Win/Draw)
-2. Total goals in the match
-3. Total goals in first or second half
-4. Total for one of the teams
+        prompt = f"""You are a match prediction assistant. Respond in this structure:
+        
+Match: {msg.text}
 
-Example format:
-Match: Arsenal vs Real Madrid
-Prediction: Arsenal win
-Total: Over 2.5
-1st half: Under 1.5
-Team total: Arsenal over 1.5
+Prediction:
+• Winner or Draw
+• Match Total
+• 1st Half or 2nd Half Total
+• Team Total
 
-Now analyze: {msg.text}
-"""
-        response = client.chat.completions.create(
+Return only the result in a short format with clear betting lines and no extra text."""
+        res = client.chat.completions.create(
             model="llama3-70b-8192",
             messages=[{"role": "user", "content": prompt}]
         )
-        answer = response.choices[0].message.content
-        for part in range(0, len(answer), 4000):
-            bot.send_message(msg.chat.id, answer[part:part+4000])
+        text = res.choices[0].message.content
+        bot.send_message(msg.chat.id, text)
     except Exception as e:
         bot.send_message(msg.chat.id, f"❌ Error:\n{e}")
 
