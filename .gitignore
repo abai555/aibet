@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+.env
+users.db
+bot_message_log.txt
